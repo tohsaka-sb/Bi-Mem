@@ -48,8 +48,6 @@ Key Arguments:
 3. Analyzing Results
 Use the provided script to generate a statistical report from the output JSONL file.
 
-
-python summarize_results.py output/results.jsonl
 4. Utilities
 extract_results.py
 clean_hierarchy.py: Delete Level 1/2 nodes to force hierarchy reconstruction.
