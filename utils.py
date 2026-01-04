@@ -68,7 +68,7 @@ def calculate_bleu_scores(prediction: str, reference: str) -> Dict[str, float]:
 
 
 def calculate_bert_scores(prediction: str, reference: str) -> Dict[str, float]:
-    """Calculate BERTScore for semantic similarity with debug logging."""
+    """Calculate BERTScore for persona similarity with debug logging."""
     print(f"[DEBUG] Starting calculate_bert_scores at {time.strftime('%X')}")
     start_time = time.time()
     

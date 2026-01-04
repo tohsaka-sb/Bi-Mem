@@ -1,4 +1,4 @@
-# python clean_hierarchy.py output/gpt/cached_memories/memory_cache_sample_0.pkl --levels scene semantic
+# python clean_hierarchy.py output/gpt/cached_memories/memory_cache_sample_0.pkl --levels scene persona
 # rm output/gpt/cached_memories/retriever_cache_sample_0_retriever.pkl
 # rm output/gpt/cached_memories/retriever_cache_sample_0_embeddings.npy
 
@@ -16,11 +16,11 @@ def clean_hierarchy(file_path, levels_to_remove=None):
     
     Args:
         file_path: Path to the .pkl file.
-        levels_to_remove: List of level strings to remove (e.g., ['scene', 'semantic']).
-                          If None, defaults to ['scene', 'semantic'].
+        levels_to_remove: List of level strings to remove (e.g., ['scene', 'persona']).
+                          If None, defaults to ['scene', 'persona'].
     """
     if levels_to_remove is None:
-        levels_to_remove = ['scene', 'semantic']
+        levels_to_remove = ['scene', 'persona']
 
     print(f"--- Cleaning Hierarchy in: {file_path} ---")
     print(f"Target levels to remove: {levels_to_remove}\n")
@@ -88,8 +88,8 @@ if __name__ == "__main__":
     parser.add_argument("file_path", type=str, help="Path to the .pkl memory cache file")
     
 
-    parser.add_argument("--levels", nargs='+', default=['scene', 'semantic'],
-                        help="List of levels to remove (e.g. 'scene' 'semantic' 'event'). Default: scene semantic")
+    parser.add_argument("--levels", nargs='+', default=['scene', 'persona'],
+                        help="List of levels to remove (e.g. 'scene' 'persona' 'fact'). Default: scene persona")
 
     args = parser.parse_args()
     

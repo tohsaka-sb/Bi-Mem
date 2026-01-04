@@ -46,27 +46,27 @@ def inspect_memory_cache(file_path, output_file=None):
     # --- Analyze Graph Nodes ---
     nodes = G.nodes(data=True)
     
-    semantic_nodes = []
+    persona_nodes = []
     scene_nodes = []
-    event_nodes = []
+    fact_nodes = []
     other_nodes = []
 
     for node_id, attrs in nodes:
         level = attrs.get('level')
-        if level == 'semantic':
-            semantic_nodes.append((node_id, attrs))
+        if level == 'persona':
+            persona_nodes.append((node_id, attrs))
         elif level == 'scene':
             scene_nodes.append((node_id, attrs))
-        elif level == 'event':
-            event_nodes.append((node_id, attrs))
+        elif level == 'fact':
+            fact_nodes.append((node_id, attrs))
         else:
             other_nodes.append((node_id, attrs))
 
     # --- Print Statistics ---
     log(f"\nTotal Nodes: {len(G.nodes)}")
-    log(f"  - Level 2 (Semantic): {len(semantic_nodes)}")
+    log(f"  - Level 2 (Persona): {len(persona_nodes)}")
     log(f"  - Level 1 (Scene)   : {len(scene_nodes)}")
-    log(f"  - Level 0 (Event)   : {len(event_nodes)}")
+    log(f"  - Level 0 (Fact)   : {len(fact_nodes)}")
     log(f"  - Unknown/Other     : {len(other_nodes)}")
     log(f"Total Edges: {len(G.edges)}")
     log("-" * 50)
@@ -80,9 +80,9 @@ def inspect_memory_cache(file_path, output_file=None):
         except:
             return "  (Edges info unavailable)"
 
-    # --- Print Level 2: Semantic Memories ---
-    log(f"\n=== Level 2: Semantic Memories ({len(semantic_nodes)}) ===")
-    for i, (nid, attrs) in enumerate(semantic_nodes, 1):
+    # --- Print Level 2: Persona Memories ---
+    log(f"\n=== Level 2: Persona Memories ({len(persona_nodes)}) ===")
+    for i, (nid, attrs) in enumerate(persona_nodes, 1):
         log(f"\n[Node {i}] ID: {nid}")
         log(f"  Attribute: {attrs.get('attribute_type', 'General')}")
         log(f"  Time: {attrs.get('timestamp')}")
@@ -103,42 +103,42 @@ def inspect_memory_cache(file_path, output_file=None):
     if len(scene_nodes) > display_limit_scene:
         log(f"\n... and {len(scene_nodes) - display_limit_scene} more scenes.")
 
-    # --- Print Level 0: Event Memories ---
-    log(f"\n\n=== Level 0: Event Memories ({len(event_nodes)}) ===")
+    # --- Print Level 0: Fact Memories ---
+    log(f"\n\n=== Level 0: Fact Memories ({len(fact_nodes)}) ===")
     try:
-        event_nodes.sort(key=lambda x: x[1].get('timestamp', ''))
+        fact_nodes.sort(key=lambda x: x[1].get('timestamp', ''))
     except:
         pass
 
-    display_limit_event = len(event_nodes) if '--all' in sys.argv else 5
+    display_limit_fact = len(fact_nodes) if '--all' in sys.argv else 5
 
-    for i, (nid, attrs) in enumerate(event_nodes[:display_limit_event], 1):
-        log(f"\n[Event {i}] ID: {nid}")
+    for i, (nid, attrs) in enumerate(fact_nodes[:display_limit_fact], 1):
+        log(f"\n[Fact {i}] ID: {nid}")
         log(f"  Time: {attrs.get('timestamp')}")
         log(f"  Content: {attrs.get('content')[:]}...") # Truncate long content for readability
         log(get_edges_str(nid))
         
 
-        # Find semantic neighbors (successors that are also events)
+        # Find persona neighbors (successors that are also facts)
         lateral_links = []
         try:
             for succ_id in G.successors(nid):
-                # Check if the target node is an event
-                if G.nodes[succ_id].get('level') == 'event':
+                # Check if the target node is an fact
+                if G.nodes[succ_id].get('level') == 'fact':
                     neighbor_content = G.nodes[succ_id].get('content', '')
                     lateral_links.append((succ_id, neighbor_content))
         except Exception:
             pass
 
         if lateral_links:
-            log(f"  >> Lateral Semantic Links ({len(lateral_links)}):")
+            log(f"  >> Lateral Persona Links ({len(lateral_links)}):")
             for target_id, content in lateral_links:
                 preview = (content[:60] + '...') if len(content) > 60 else content
                 log(f"     - -> {target_id}: {preview}")
 
 
-    if len(event_nodes) > display_limit_event:
-        log(f"\n... and {len(event_nodes) - display_limit_event} more events.")
+    if len(fact_nodes) > display_limit_fact:
+        log(f"\n... and {len(fact_nodes) - display_limit_fact} more facts.")
 
     log("\n\n=== Inspection Complete ===")
     

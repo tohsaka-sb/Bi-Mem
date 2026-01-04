@@ -167,7 +167,7 @@ def load_locomo_dataset(file_path: Union[str, Path]) -> List[LoCoMoSample]:
             # Parse conversation
             conversation = parse_conversation(sample["conversation"])
             
-            # Parse event summary
+            # Parse fact summary
             event_summary = EventSummary(events=sample["event_summary"])
             
             # Parse observation

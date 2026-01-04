@@ -168,7 +168,7 @@ class advancedMemAgent:
 
                             Instructions:
                             1. Identify the specific [EVENT] related to the question.
-                            2. Look at the [Time: ...] timestamp of that event. Treat this as the "Reference Date".
+                            2. Look at the [Time: ...] timestamp of that fact. Treat this as the "Reference Date".
                             
                             3. **Date Format**: 
                                - You MUST use the format "Day Month, Year" (e.g., "15 July, 2023"). 
@@ -261,7 +261,7 @@ class advancedMemAgent:
                 cat1_specific_instruction = """
                 - **List Exhaustion**: If the question asks for multiple items (e.g., "Which books"), list **ALL** specific entities mentioned in [EVENT] blocks. Do NOT summarize.
                 - **Reference Resolution**: If the text mentions a pronoun (e.g., "my home country"), you MUST search the context to find the **specific proper noun** (e.g., "Sweden").
-                - **Temporal Filtering**: If the question asks about "recently" or "last", compare [Time: ...] stamps to find the latest event.
+                - **Temporal Filtering**: If the question asks about "recently" or "last", compare [Time: ...] stamps to find the latest fact.
                 - **Exact Name**: Provide the full, exact name of the entity if asked.
                 """
 

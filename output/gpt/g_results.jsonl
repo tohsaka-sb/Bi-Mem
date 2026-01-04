@@ -1,0 +1,1 @@
+{"type": "metadata", "model": "gpt-4o-mini", "backend": "openai", "dataset": "/root/autodl-tmp/Bi-Mem/data/locomo10.json", "ratio": 0.3, "retrieval_strategy": "graph_traversal", "evaluation_start_time": "2026-01-05T00:11:36.383657"}

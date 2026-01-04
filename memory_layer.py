@@ -22,7 +22,7 @@ import requests
 import networkx as nx
 from tqdm import tqdm
 from sentence_transformers import util # Need util for cos_sim
-from memory_managers import SceneManager, SemanticManager
+from memory_managers import SceneManager, PersonaManager
 from rank_bm25 import BM25Okapi
 import numpy as np
 
@@ -231,7 +231,7 @@ class MemoryNote:
     """
     def __init__(self, 
                  content: str,
-                 level: str, # 'event', 'scene', or 'semantic'
+                 level: str, # 'fact', 'scene', or 'persona'
                  timestamp: str,
                  keywords: Optional[List[str]] = None,
                  context: Optional[str] = None, 
@@ -255,7 +255,7 @@ class MemoryNote:
 
 class HybridRetriever:
     """
-    Hybrid retrieval system combining BM25 (Sparse) and Semantic (Dense) search.
+    Hybrid retrieval system combining BM25 (Sparse) and Persona (Dense) search.
     Designed for lazy-loading BM25 index to handle incremental updates efficiently.
     """
     
@@ -518,7 +518,7 @@ class AgenticMemorySystem:
         
         # Instantiate Managers
         self.scene_manager = SceneManager(self.llm_controller.llm, self.retriever)
-        self.semantic_manager = SemanticManager(self.llm_controller.llm, self.retriever)
+        self.persona_manager = PersonaManager(self.llm_controller.llm, self.retriever)
 
         # --- Prompts (Note Construction & Evolution remain here as they are Level 0) ---
         self.note_construction_prompt = """Generate a structured analysis of the following content by:
@@ -617,7 +617,7 @@ class AgenticMemorySystem:
     ####
 
     def add_note(self, content: str, time: str = None, **kwargs) -> str:
-        """Adds a new event-level memory note to the graph."""
+        """Adds a new fact-level memory note to the graph."""
         self.turn_count += 1
         node_id = str(uuid.uuid4())
         timestamp = time or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -626,7 +626,7 @@ class AgenticMemorySystem:
         
         note_data = MemoryNote(
             content=content,
-            level='event',
+            level='fact',
             timestamp=timestamp,
             keywords=analysis.get('keywords', []),
             context=analysis.get('context', ''),
@@ -695,8 +695,8 @@ class AgenticMemorySystem:
                         target_id = conn
                     
                     if target_id and target_id != node_id:
-                        self.graph.add_edge(node_id, target_id, type='semantic_related')
-                        self.graph.add_edge(target_id, node_id, type='semantic_related')
+                        self.graph.add_edge(node_id, target_id, type='persona_related')
+                        self.graph.add_edge(target_id, node_id, type='persona_related')
 
             if "update_neighbor" in actions:
                 new_contexts = response_json.get("new_context_neighborhood", [])
@@ -732,7 +732,7 @@ class AgenticMemorySystem:
         # --- Level 1 Construction (Delegated to SceneManager) ---
         print("--- Building Level 1 (Scene) Memories ---")
         
-        level0_nodes = [n for n, d in self.graph.nodes(data=True) if d.get('level') == 'event']
+        level0_nodes = [n for n, d in self.graph.nodes(data=True) if d.get('level') == 'fact']
         if not level0_nodes:
             print("No Level 0 nodes found.")
             return
@@ -766,26 +766,26 @@ class AgenticMemorySystem:
                 if save_callback: save_callback()
                 pbar.update(1)
 
-        # --- Level 2 Construction (Delegated to SemanticManager) ---
-        print("\n--- Building Level 2 (Semantic) Memories ---")
+        # --- Level 2 Construction (Delegated to PersonaManager) ---
+        print("\n--- Building Level 2 (Persona) Memories ---")
         
-        level2_nodes = [n for n, d in self.graph.nodes(data=True) if d.get('level') == 'semantic']
+        level2_nodes = [n for n, d in self.graph.nodes(data=True) if d.get('level') == 'persona']
         if level2_nodes:
-            print(f"Level 2 (Semantic) memories already exist ({len(level2_nodes)} nodes). Skipping.")
-            with tqdm(total=1, initial=1, desc="Building Level 2 (Semantic)") as pbar: pass
+            print(f"Level 2 (Persona) memories already exist ({len(level2_nodes)} nodes). Skipping.")
+            with tqdm(total=1, initial=1, desc="Building Level 2 (Persona)") as pbar: pass
         else:
             level1_nodes = [n for n, d in self.graph.nodes(data=True) if d.get('level') == 'scene']
             if not level1_nodes:
                 print("No Level 1 nodes found. Cannot build Level 2.")
                 return
 
-            print(f"Delegating Semantic Profile generation to SemanticManager...")
+            print(f"Delegating Persona Profile generation to PersonaManager...")
             
-            with tqdm(total=1, initial=0, desc="Building Level 2 (Semantic)") as pbar:
-                new_semantic_nodes = self.semantic_manager.build_profile(self.graph, level1_nodes)
+            with tqdm(total=1, initial=0, desc="Building Level 2 (Persona)") as pbar:
+                new_persona_nodes = self.persona_manager.build_profile(self.graph, level1_nodes)
                 
                 created_count = 0
-                for node_data in new_semantic_nodes:
+                for node_data in new_persona_nodes:
                     node_id = node_data['id']
                     links = node_data['links']
                     
@@ -800,7 +800,7 @@ class AgenticMemorySystem:
                     
                     self._update_retriever([node_id])
 
-                print(f"Created {created_count} Level 2 (Semantic) nodes.")
+                print(f"Created {created_count} Level 2 (Persona) nodes.")
                 pbar.update(1)
                 if save_callback: save_callback()
 
@@ -808,7 +808,7 @@ class AgenticMemorySystem:
         if enable_refinement:
             print("\n--- Starting Top-Down Refinement (Level 2 -> Level 1) ---")
             
-            level2_nodes = [n for n, d in self.graph.nodes(data=True) if d.get('level') == 'semantic']
+            level2_nodes = [n for n, d in self.graph.nodes(data=True) if d.get('level') == 'persona']
             if not level2_nodes:
                 print("Skipping refinement: No Level 2 nodes available.")
             else:
@@ -910,14 +910,14 @@ class AgenticMemorySystem:
                     node_data = self.graph.nodes[nid]
                     level = node_data.get('level')
                     
-                    # Only allow 'event' nodes as seeds
-                    if level in ['event','scene','semantic']:
+                    # Only allow 'fact' nodes as seeds
+                    if level in ['fact','scene','persona']:
                         seed_node_ids.append(nid)
 
             
-            semantic_context_nodes = set()
+            persona_context_nodes = set()
             scene_context_nodes = set()
-            event_context_nodes = set()
+            fact_context_nodes = set()
             
             # Expansion
             for nid in seed_node_ids:
@@ -925,24 +925,24 @@ class AgenticMemorySystem:
                 node_data = self.graph.nodes[nid]
                 level = node_data.get('level')
                 
-                if level == 'semantic':
-                    # semantic_context_nodes.add(nid)
+                if level == 'persona':
+                    # persona_context_nodes.add(nid)
                     # connected_scenes = list(self.graph.successors(nid))
                     # for child in connected_scenes[:3]: # Limit expansion
                     #     scene_context_nodes.add(child)
-                    continue # Skip expansion for semantic
+                    continue # Skip expansion for persona
                         
                 elif level == 'scene':
                     scene_context_nodes.add(nid)
-                    # Expansion: Get contained events (Successors)
-                    contained_events = list(self.graph.successors(nid))
-                    for child in contained_events[:5]:
-                        event_context_nodes.add(child)
+                    # Expansion: Get contained facts (Successors)
+                    contained_facts = list(self.graph.successors(nid))
+                    for child in contained_facts[:5]:
+                        fact_context_nodes.add(child)
                     # continue
                         
-                elif level == 'event':
+                elif level == 'fact':
                     # continue
-                    event_context_nodes.add(nid)
+                    fact_context_nodes.add(nid)
                     # Expansion: Get parent scene for context (Predecessors)
                     parents = list(self.graph.predecessors(nid))
                     for parent in parents:
@@ -950,7 +950,7 @@ class AgenticMemorySystem:
                             scene_context_nodes.add(parent)
                     
 
-            extended_nodes = list(semantic_context_nodes | scene_context_nodes | event_context_nodes)
+            extended_nodes = list(persona_context_nodes | scene_context_nodes | fact_context_nodes)
             unique_nodes = {}
             all_candidates = seed_node_ids + extended_nodes
             
@@ -972,8 +972,8 @@ class AgenticMemorySystem:
             
             current_query = query
             
-            # --- Step 1: Retrieve Level 2 (Semantic) ---
-            l2_nodes = [n for n, d in self.graph.nodes(data=True) if d.get('level') == 'semantic']
+            # --- Step 1: Retrieve Level 2 (Persona) ---
+            l2_nodes = [n for n, d in self.graph.nodes(data=True) if d.get('level') == 'persona']
             if not l2_nodes:
                 return self.find_related_memories(query, k, strategy="flat")
 
@@ -1021,10 +1021,10 @@ class AgenticMemorySystem:
             else:
                 selected_l1_ids = []
 
-            # --- Step 3: Retrieve Level 0 (Event) from Selected L1 Children ---
+            # --- Step 3: Retrieve Level 0 (Fact) from Selected L1 Children ---
             candidate_l0_ids = set()
             for l1_id in selected_l1_ids:
-                children = [n for n in self.graph.successors(l1_id) if self.graph.nodes[n].get('level') == 'event']
+                children = [n for n in self.graph.successors(l1_id) if self.graph.nodes[n].get('level') == 'fact']
                 candidate_l0_ids.update(children)
             
             candidate_l0_ids = list(candidate_l0_ids)
@@ -1046,8 +1046,8 @@ class AgenticMemorySystem:
             
             current_query = query
             
-            # --- Step 1: Retrieve Level 0 (Event) ---
-            l0_nodes = [n for n, d in self.graph.nodes(data=True) if d.get('level') == 'event']
+            # --- Step 1: Retrieve Level 0 (Fact) ---
+            l0_nodes = [n for n, d in self.graph.nodes(data=True) if d.get('level') == 'fact']
             if not l0_nodes:
                 return self.find_related_memories(query, k, strategy="flat")
 
@@ -1093,10 +1093,10 @@ class AgenticMemorySystem:
             else:
                 selected_l1_ids = []
 
-            # --- Step 3: Retrieve Level 2 (Semantic) from Parents of Selected L1 ---
+            # --- Step 3: Retrieve Level 2 (Persona) from Parents of Selected L1 ---
             candidate_l2_ids = set()
             for l1_id in selected_l1_ids:
-                parents = [n for n in self.graph.predecessors(l1_id) if self.graph.nodes[n].get('level') == 'semantic']
+                parents = [n for n in self.graph.predecessors(l1_id) if self.graph.nodes[n].get('level') == 'persona']
                 candidate_l2_ids.update(parents)
             
             candidate_l2_ids = list(candidate_l2_ids)

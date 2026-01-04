@@ -37,13 +37,13 @@ class SceneManager(BaseManager):
         self.prompt_template = """
         You are an AI Scene Analyst specialized in narrative comprehension.
         
-        Task: Summarize a cluster of related conversation events into a coherent 'Scene Memory'.
+        Task: Summarize a cluster of related conversation facts into a coherent 'Scene Memory'.
         
-        Input Events:
-        {events_content}
+        Input Facts:
+        {facts_content}
         
         Instructions:
-        1. Identify the core theme connecting these events.
+        1. Identify the core theme connecting these facts.
         2. Create a descriptive summary that captures the progression of the conversation.
         3. Extract key entities and topics.
         
@@ -80,13 +80,13 @@ class SceneManager(BaseManager):
 
 
     def build_scene(self, graph, community_nodes):
-        """Builds a single scene node from a list of event node IDs."""
-        events_content = ""
+        """Builds a single scene node from a list of fact node IDs."""
+        facts_content = ""
         for nid in community_nodes:
             node_data = graph.nodes[nid]
-            events_content += f"- [{node_data.get('timestamp', '')}] {node_data.get('content', '')}\n"
+            facts_content += f"- [{node_data.get('timestamp', '')}] {node_data.get('content', '')}\n"
         
-        prompt = self.prompt_template.format(events_content=events_content)
+        prompt = self.prompt_template.format(facts_content=facts_content)
         analysis = self._get_llm_json_response(prompt)
         
         return {
@@ -116,8 +116,8 @@ class SceneManager(BaseManager):
         return None
     ####
 
-class SemanticManager(BaseManager):
-    """Manages Level 2 (Semantic) memory construction."""
+class PersonaManager(BaseManager):
+    """Manages Level 2 (Persona) memory construction."""
     
     def __init__(self, llm_controller, retriever):
         super().__init__(llm_controller, retriever)
@@ -181,7 +181,7 @@ class SemanticManager(BaseManager):
             new_nodes_data.append({
                 "id": str(uuid.uuid4()),
                 "content": content,
-                "level": "semantic",
+                "level": "persona",
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "tags": [dim.replace("_", " ").title()],
                 "attribute_type": dim,
