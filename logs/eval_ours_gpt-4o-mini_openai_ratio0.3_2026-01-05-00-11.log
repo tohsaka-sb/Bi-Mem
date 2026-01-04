@@ -1,7 +1,0 @@
-2026-01-05 00:11:36,115 - INFO - Loading dataset from /root/autodl-tmp/Bi-Mem/data/locomo10.json
-2026-01-05 00:11:36,382 - INFO - Loaded 10 samples
-2026-01-05 00:11:36,383 - INFO - Using 3 samples (30.0% of dataset)
-2026-01-05 00:11:36,383 - INFO - Initializing new results file at output/gpt/g_results.jsonl
-2026-01-05 00:11:36,383 - INFO - Using memory cache directory: output/gpt/cached_memories
-2026-01-05 00:11:43,294 - INFO - No cached memories found for sample 0. Starting new memory creation.
-2026-01-05 00:11:43,294 - INFO - Processing 419 remaining turns for sample 0.
