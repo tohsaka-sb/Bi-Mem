@@ -70,6 +70,6 @@ Overall F1	0.49 (SOTA)
 Temporal F1	0.54 (SOTA)
 Single-Hop F1	0.53 (SOTA)
 📜 Citation
-If you use this  for your research, please cite our work .
+If you use this for your research, please cite our work.
 
 
