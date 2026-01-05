@@ -55,10 +55,8 @@ class SceneManager(BaseManager):
         }}
         """
 
-
-
         self.refinement_prompt_template = """
-        You are an A Memory Enhancer. Your task is to Enrich a Scene Memory based on the high-level User Profile, WiIT HOUuT Losing existing details
+        You are an AI Memory Enhancer. Your task is to Enrich a Scene Memory based on the high-level User Profile, WITHOUT losing existing details.
         
         High-Level User Profile (Level 2):
         {user_profile}
@@ -68,19 +66,21 @@ class SceneManager(BaseManager):
         
         Instructions:
         1. Read the User Profile to understand the user's key interests, values, and traits.
-        2. Generate a "Psychological Insight" or "Thematic Link" sentence.
-        3. Even if the connection is subtle, MAKE IT EXPLICIT. 
-        4. Example: If scene mentions "painting", and profile says "Values Creativity", add: "This act of painting exemplifies her core value of creativity."
+        2. Check the Current Scene Summary. Does it fail to mention any specific connection to the User Profile that is likely present in the events?
+        3. If yes, create an ADDITION string to append to the summary. This addition should explicitly link the scene to the profile (e.g., "This aligns with her interest in X...").
+        4. CRITICAL: DO NOT REWRITE the existing summary. ONLY generate text to ADD.
+        5. If the current summary is already perfect, return an empty string for "addition".
         
         Format the response as a JSON object:
         {{
-            "insight": "The sentence to append..."
+            "needs_enhancement": true/false,
+            "addition": "Text to append (or empty string)",
+            "reason": "Why you decided to add this"
         }}
         """
 
 
     def build_scene(self, graph, community_nodes):
-        """Builds a single scene node from a list of fact node IDs."""
         facts_content = ""
         for nid in community_nodes:
             node_data = graph.nodes[nid]
@@ -99,7 +99,7 @@ class SceneManager(BaseManager):
         }
 
     def refine_single_scene(self, current_summary, user_profile_text):
-        """Refines a single scene's summary by appending forced insights."""
+        """Refines a single scene's summary by appending new insights."""
         prompt = self.refinement_prompt_template.format(
             user_profile=user_profile_text,
             current_summary=current_summary
@@ -107,11 +107,11 @@ class SceneManager(BaseManager):
         
         analysis = self._get_llm_json_response(prompt)
         
-        insight = analysis.get("insight", "").strip()
-        
-        # Threshold: As long as it's not complete garbage (score > 3) and not empty
-        if insight and len(insight) > 10 :
-            return f"{current_summary}\n[Insight]: {insight}"
+        # Relaxed logic from Ver 6: as long as 'addition' is not empty, we update
+        addition = analysis.get("addition", "").strip()
+        if addition and len(addition) > 5:
+            # Additive update
+            return f"{current_summary}\n[Insight]: {addition}"
             
         return None
     ####

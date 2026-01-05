@@ -150,7 +150,7 @@ class advancedMemAgent:
         
         assert category in [1,2,3,4,5]
         
-        # --- Optimized Prompts (Inspired by GAM) ---
+        # --- Optimized Prompts  ---
         
         # Common formatting instruction to encourage short, precise answers (F1/BLEU friendly)
         format_instruction = """

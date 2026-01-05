@@ -705,7 +705,6 @@ class AgenticMemorySystem:
                     if i < len(new_contexts) and i < len(new_tags_list):
                         self.graph.nodes[n_id]['context'] = new_contexts[i]
                         self.graph.nodes[n_id]['tags'] = new_tags_list[i]
-                        print(f"  -> Updated neighbor {n_id} (Index {i}): New Context='{new_contexts[i][:30]}...', New Tags={new_tags_list[i]}")
 
                          
         return should_evolve
@@ -843,27 +842,15 @@ class AgenticMemorySystem:
                             self._update_retriever([scene_id])
                             updated_count += 1
                         
-                            added_part = new_summary.split("[Insight]:")[-1].strip() if "[Insight]:" in new_summary else "Modified content"
-                            
-                            try:
-                                with open("refinement_comparison.txt", "a", encoding="utf-8") as f_log:
-                                    f_log.write(f"=== Refinement Case {datetime.now().strftime('%H:%M:%S')} ===\n")
-                                    f_log.write(f"Scene ID: {scene_id}\n")
-                                    f_log.write(f"Original Summary:\n{current_summary}\n")
-                                    f_log.write(f"Added Insight:\n{added_part}\n")
-                                    f_log.write("="*50 + "\n\n")
-                            except Exception as e:
-                                print(f"Failed to write refinement log: {e}")
-                        ####
-                        # Mark as refined regardless of whether content changed
-                        # (because we checked it and decided it didn't need change)
+                         
+
                         self.graph.nodes[scene_id]['refined'] = True
                         
                         pbar.update(1)
                         if save_callback and updated_count % 10 == 0: 
                             save_callback()
                 
-                print(f"Refinement complete. Updated {updated_count} scenes.")
+                print(f"Refinement complete. ")
                 if save_callback: save_callback()
 
         print("\n=== Hierarchy Construction Complete ===")
@@ -1169,12 +1156,6 @@ class AgenticMemorySystem:
 
 class TransformersController(BaseLLMController):
     def __init__(self, model_path: str):
-        """
-        使用 Hugging Face Transformers 库加载本地模型的 Controller。
-        
-        Args:
-            model_path: 指向您本地模型文件夹的路径。
-        """
         print(f"Loading local model from: {model_path}")
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"Using device: {self.device}")
