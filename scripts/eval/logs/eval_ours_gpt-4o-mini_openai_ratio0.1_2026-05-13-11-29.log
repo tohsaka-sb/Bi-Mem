@@ -1,0 +1,7 @@
+2026-05-13 11:29:54,168 - INFO - Loading dataset from /mnt/c/Users/Administrator/Desktop/Bi-Mem/scripts/eval/../../data/locomo10.json
+2026-05-13 11:29:54,271 - INFO - Loaded 10 samples
+2026-05-13 11:29:54,272 - INFO - Using 1 samples (10.0% of dataset)
+2026-05-13 11:29:54,274 - INFO - Found existing results file. Will resume and append to output/results.jsonl
+2026-05-13 11:29:54,276 - INFO - Using memory cache directory: output/cached_memories
+2026-05-13 11:30:02,002 - INFO - No cached memories found for sample 0. Starting new memory creation.
+2026-05-13 11:30:02,003 - INFO - Processing 419 remaining turns for sample 0.
