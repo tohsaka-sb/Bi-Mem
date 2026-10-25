@@ -87,15 +87,68 @@ class SceneManager(BaseManager):
         
         prompt = self.prompt_template.format(facts_content=facts_content)
         analysis = self._get_llm_json_response(prompt)
+        summary = analysis.get('scene_summary')
+        if not isinstance(summary, str) or not summary.strip():
+            raise ValueError('Scene generation failed: no valid scene_summary')
         
         return {
             "id": str(uuid.uuid4()),
-            "content": analysis.get('scene_summary', 'Scene Summary'),
+            "content": summary.strip(),
             "level": 'scene',
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "keywords": analysis.get('keywords', []),
             "tags": analysis.get('tags', [])
         }
+
+    def update_scene(self, scene, fact):
+        """Update from the previous summary plus one new fact, not all facts."""
+        prompt = (
+            'Incrementally update a scene memory using the existing summary and one new fact. '
+            'Preserve relevant existing details, people, dates and temporal distinctions. '
+            'Treat any existing [Insight] as interpretation, not factual evidence. '
+            'Do not invent events or replace newer facts with older evidence. '
+            'Return JSON with scene_summary (nonempty string), keywords (string list), '
+            'and tags (string list).\nExisting scene:\n'
+            + json.dumps(scene, ensure_ascii=False, default=str)
+            + '\nNew fact:\n' + json.dumps(fact, ensure_ascii=False, default=str)
+        )
+        analysis = self._get_llm_json_response(prompt)
+        content = analysis.get('scene_summary')
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError('Incremental scene update failed: no valid scene_summary')
+        result = {'content': content.strip()}
+        for key in ('keywords', 'tags'):
+            value = analysis.get(key, scene.get(key, []))
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                raise ValueError(f'Invalid scene {key}')
+            result[key] = value
+        return result
+
+    def compress_facts(self, graph, fact_ids):
+        """Lossy compression must succeed before its source facts can be deleted."""
+        facts = [dict(graph.nodes[n]) for n in fact_ids]
+        prompt = (
+            'Compress the following old factual memories into ONE concise factual memory. '
+            'Retain the core events, entities and chronological changes; omit minor detail. '
+            'Preserve distinctions between different people and conflicting dates. '
+            'Do not infer personality, invent facts, or use persona insights as evidence. '
+            'Return JSON with content (nonempty string), context (string), '
+            'keywords (string list), tags (string list).\nFacts:\n'
+            + json.dumps(facts, ensure_ascii=False, default=str)
+        )
+        analysis = self._get_llm_json_response(prompt)
+        content = analysis.get('content')
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError('Fact compression failed: original memories were retained')
+        result = {'content': content.strip(), 'context': analysis.get('context', '')}
+        if not isinstance(result['context'], str):
+            raise ValueError('Invalid compressed context')
+        for key in ('keywords', 'tags'):
+            value = analysis.get(key, [])
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                raise ValueError(f'Invalid compressed {key}')
+            result[key] = value
+        return result
 
     def refine_single_scene(self, current_summary, user_profile_text):
         """Refines a single scene's summary by appending new insights."""
@@ -142,6 +195,64 @@ class PersonaManager(BaseManager):
         }}
         """
         self.dimensions = ["basic_info", "interests", "personality", "values", "relationships"]
+
+    def analyze_scene(self, scene, profiles):
+        """Classify relevance/conflicts; never let the LLM decide time precedence."""
+        prompt = (
+            'Analyze ONE newly created scene against the existing persona claims. '
+            'Use scene memories as evidence; no raw fact input is provided. '
+            'For each relevant dimension, return at most one proposal. Allowed dimensions: '
+            'basic_info, interests, personality, values, relationships. '
+            'Classify first: adds = a new compatible standalone conclusion, '
+            'supports = confirms existing claims without changing them, '
+            'conflicts = contradicts specific existing claims, unrelated = no update. '
+            'Do not disguise contradictions as additions. Treat one-off events and '
+            'persona-derived [Insight] as insufficient evidence of enduring traits. '
+            'For conflicts, identify only the contradictory claim IDs; preserve all '
+            'unrelated claims. Do NOT resolve conflicts or choose the newer view: '
+            'the program compares source event times after classification. '
+            'Content must be supported solely by the incoming scene, not a rewritten '
+            'whole profile. For supports/conflicts, target_claim_ids must identify '
+            'existing claims in that dimension. Adds/unrelated must have no targets. '
+            'Return JSON {"decisions": [{"dimension": "interests", "relation": '
+            '"adds|supports|conflicts|unrelated", "content": "standalone claim", '
+            '"target_claim_ids": []}]}. Empty decisions means no relevant evidence. '
+            '\nExisting persona claims and source evidence:\n'
+            + json.dumps(profiles, ensure_ascii=False, default=str)
+            + '\nNew scene:\n' + json.dumps(scene, ensure_ascii=False, default=str)
+        )
+        analysis = self._get_llm_json_response(prompt)
+        decisions = analysis.get('decisions') if isinstance(analysis, dict) else None
+        if not isinstance(decisions, list):
+            raise ValueError('Invalid scene/persona classification')
+        validated = []
+        seen = set()
+        for decision in decisions:
+            if not isinstance(decision, dict):
+                raise ValueError('Persona decision must be an object')
+            dimension = decision.get('dimension')
+            relation = decision.get('relation')
+            targets = decision.get('target_claim_ids')
+            if not isinstance(dimension, str) or dimension not in self.dimensions or dimension in seen:
+                raise ValueError('Invalid or repeated persona dimension')
+            seen.add(dimension)
+            if relation not in ('adds', 'supports', 'conflicts', 'unrelated'):
+                raise ValueError('Invalid persona relation')
+            if not isinstance(targets, list) or not all(isinstance(t, str) for t in targets):
+                raise ValueError('Invalid target_claim_ids')
+            known_ids = {claim['id'] for claim in profiles.get(dimension, [])}
+            if len(set(targets)) != len(targets) or not set(targets) <= known_ids:
+                raise ValueError('Persona decision refers to an unknown or duplicate claim')
+            if bool(targets) != (relation in ('supports', 'conflicts')):
+                raise ValueError('Persona target claims do not match the relation')
+            if relation == 'unrelated':
+                continue
+            content = decision.get('content')
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError('Persona proposal must contain nonempty content')
+            validated.append({'dimension': dimension, 'relation': relation,
+                              'content': content.strip(), 'target_claim_ids': targets})
+        return validated
 
     def build_profile(self, graph, scene_nodes):
         """Builds Level 2 nodes from a list of scene node IDs."""

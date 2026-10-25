@@ -496,11 +496,11 @@ def setup_logger(log_file: Optional[str] = None) -> logging.Logger:
 def save_checkpoint_internal(agent, mem_file, ret_file, ret_emb_file, turns):
     """Standalone helper to save checkpoints."""
     try:
-        with open(mem_file, 'wb') as f:
-            pickle.dump({'turns_processed': turns, 'graph': agent.memory_system.graph}, f)
+        agent.memory_system.save(mem_file, turns_processed=turns)
         agent.memory_system.retriever.save(ret_file, ret_emb_file)
     except Exception as e:
         print(f"Error saving checkpoint: {e}")
+        raise
 
 def evaluate_longmem_dataset(
     dataset_path: str,
@@ -597,40 +597,16 @@ def evaluate_longmem_dataset(
         
         CHECKPOINT_INTERVAL = 10
         turns_processed = 0
-        import networkx as nx
-        cached_graph = nx.DiGraph() 
-
         if os.path.exists(memory_cache_file):
             logger.info(f"Loading cached memories for sample {sample.sample_id} from {memory_cache_file}")
-            try:
-                with open(memory_cache_file, 'rb') as f:
-                    saved_data = pickle.load(f)
-                    turns_processed = saved_data.get('turns_processed', 0)
-                    cached_graph = saved_data.get('graph', nx.DiGraph())
-            except (pickle.UnpicklingError, EOFError, AttributeError, ImportError) as e:
-                logger.warning(f"Could not load memory checkpoint file (error: {e}). Starting from scratch for this sample.")
-                turns_processed = 0
-                cached_graph = nx.DiGraph()
-            
-            agent.memory_system.graph = cached_graph
-            
-            if turns_processed > 0 and os.path.exists(retriever_cache_file) and os.path.exists(retriever_cache_embeddings_file):
-                logger.info(f"Loading retriever from cache for sample {sample.sample_id}")
-                agent.memory_system.retriever.load(retriever_cache_file, retriever_cache_embeddings_file)
-            else:
-                if agent.memory_system.graph.number_of_nodes() > 0:
-                    logger.warning(f"Retriever cache not found or is outdated. Rebuilding retriever from loaded graph.")
-                    all_node_ids = list(agent.memory_system.graph.nodes())
-                    from src.bimem.core.memory_layer import SimpleEmbeddingRetriever
-                    try:
-                        agent.memory_system.retriever = SimpleEmbeddingRetriever('all-MiniLM-L6-v2')
-                    except:
-                        pass
-                    agent.memory_system._update_retriever(all_node_ids)
-
-            logger.info(f"Successfully loaded {agent.memory_system.graph.number_of_nodes()} memories, resuming from turn {turns_processed}.")
+            agent.memory_system.load(memory_cache_file)
+            # Automatic snapshots and old evaluation checkpoints both restore
+            # the input count, independent of scene/compacted fact node counts.
+            turns_processed = agent.memory_system.turn_count
+            logger.info(f"Loaded {agent.memory_system.graph.number_of_nodes()} memories, resuming from turn {turns_processed}.")
         else:
             logger.info(f"No cached memories found for sample {sample.sample_id}. Starting new memory creation.")
+        agent.memory_system.storage_path = Path(memory_cache_file)
 
         all_turns = []
         for _, session in sorted(sample.conversation.sessions.items()):

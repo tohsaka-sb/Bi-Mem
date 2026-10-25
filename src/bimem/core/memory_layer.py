@@ -12,6 +12,9 @@ from abc import ABC, abstractmethod
 from transformers import AutoModel, AutoTokenizer,AutoModelForCausalLM, AutoTokenizer, pipeline
 import pickle
 from pathlib import Path
+from .persistence import read_checkpoint, write_checkpoint
+from .incremental import IncrementalMemoryMixin, event_time, validate_config
+import copy
 from litellm import completion
 import time
 import torch
@@ -465,7 +468,7 @@ class SimpleEmbeddingRetriever:
         retriever.add_documents(all_docs)
         return retriever
 
-class AgenticMemorySystem:
+class AgenticMemorySystem(IncrementalMemoryMixin):
     """
     A multi-level memory system based on a graph structure.
     """
@@ -474,10 +477,23 @@ class AgenticMemorySystem:
                  llm_backend: str = "openai",
                  llm_model: str = "gpt-4o-mini",
                  evo_threshold: int = 100,
-                 api_key: Optional[str] = None):
+                 api_key: Optional[str] = None,
+                 storage_path: Optional[Union[str, Path]] = None,
+                 scene_match_threshold: float = 0.5,
+                 fact_link_threshold: float = 0.2,
+                 unmatched_threshold: int = 100,
+                 max_fact_nodes: int = 1000):
         
         self.graph = nx.DiGraph()
+        self.graph.graph['incremental_config'] = validate_config({
+            'scene_match_threshold': scene_match_threshold,
+            'fact_link_threshold': fact_link_threshold,
+            'unmatched_threshold': unmatched_threshold,
+            'max_fact_nodes': max_fact_nodes,
+        })
         self.turn_count = 0
+        self.model_name = model_name
+        self.storage_path = Path(storage_path) if storage_path is not None else None
 
         self.retriever = HybridRetriever(model_name, alpha=0.5)
         self.llm_controller = LLMController(llm_backend, llm_model, api_key)
@@ -535,6 +551,8 @@ class AgenticMemorySystem:
         
         self.evo_cnt = 0 
         self.evo_threshold = evo_threshold
+        if self.storage_path is not None and self.storage_path.exists():
+            self.load(self.storage_path)
 
     def _analyze_content(self, content: str) -> Dict:
         """Helper method to call LLM for metadata generation (Level 0)."""
@@ -574,45 +592,132 @@ class AgenticMemorySystem:
             return {}
 
     def add_note(self, content: str, time: str = None, **kwargs) -> str:
-        """Adds a new fact-level memory note to the graph."""
-        self.turn_count += 1
-        node_id = str(uuid.uuid4())
-        timestamp = time or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        """Create -> match/update scene -> compress -> cluster -> persona -> save.
 
+        A failed maintenance step rolls back the graph, index and counters. The
+        returned ID identifies the retained fact, including if it was compressed.
+        """
+        timestamp = time or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        event_time(timestamp)  # Reject invalid event times before model calls.
         analysis = self._analyze_content(content)
-        
-        note_data = MemoryNote(
-            content=content,
-            level='fact',
-            timestamp=timestamp,
-            keywords=analysis.get('keywords', []),
-            context=analysis.get('context', ''),
-            tags=analysis.get('tags', [])
-        )
-        
-        self.graph.add_node(node_id, **note_data.to_dict())
-        self._update_retriever([node_id])
-        
-        self.process_memory(node_id, note_data)
-        
+        if not isinstance(analysis, dict):
+            raise ValueError("Fact analysis must return a JSON object")
+        for key in ('keywords', 'tags'):
+            value = analysis.get(key, [])
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                raise ValueError(f"Invalid fact {key}")
+        if not isinstance(analysis.get('context', ''), str):
+            raise ValueError("Invalid fact context")
+        node_id = str(uuid.uuid4())
+        note = MemoryNote(content=content, level='fact', timestamp=timestamp,
+                          keywords=analysis.get('keywords', []),
+                          context=analysis.get('context', ''), tags=analysis.get('tags', []))
+        previous_graph = self.graph
+        previous_count = self.turn_count
+        # Build on a private copy so failed LLM, encoding or disk operations cannot
+        # partially delete old memories or accept an input beyond the fact limit.
+        self.graph = copy.deepcopy(previous_graph)
+        index_state = {key: getattr(self.retriever, key, None) for key in
+                       ('corpus', 'embeddings', 'bm25', 'is_bm25_dirty')}
+        try:
+            self._initialize_persona_evidence()
+            self.graph.add_node(node_id, **note.to_dict())
+            self._match_scene(node_id)
+            self._link_fact(node_id)
+            replacements = self._enforce_fact_capacity()
+            self._cluster_unmatched()
+            self._update_retriever(list(self.graph))
+            self.turn_count += 1
+            if self.storage_path is not None:
+                self.save(self.storage_path)
+        except Exception:
+            self.graph = previous_graph
+            self.turn_count = previous_count
+            for key, value in index_state.items():
+                setattr(self.retriever, key, value)
+            raise
+        # Keep only embeddings for content still represented by a live node.
+        live_texts = {attrs.get('content', '') for _, attrs in self.graph.nodes(data=True)}
+        self._content_embeddings = {text: vector for text, vector in
+                                    getattr(self, '_content_embeddings', {}).items() if text in live_texts}
+        while node_id in replacements:
+            node_id = replacements[node_id]
         return node_id
-    
+
+    def save(self, path: Union[str, Path], turns_processed: Optional[int] = None):
+        """Atomically save graph and counters; retrieval indexes are derived state."""
+        state = {
+            'format_version': 1,
+            'graph': self.graph,
+            'turn_count': self.turn_count,
+            'evo_cnt': self.evo_cnt,
+            'evo_threshold': self.evo_threshold,
+        }
+        if turns_processed is not None:
+            state['turns_processed'] = turns_processed
+        write_checkpoint(path, state)
+
+    def load(self, path: Union[str, Path]):
+        """Restore a trusted local checkpoint, including legacy evaluation files.
+
+        Keeps the configured embedding model and LLM connection. Rebuilds the
+        retrieval index from graph content, avoiding stale external cache files.
+        """
+        state = read_checkpoint(path)
+        graph = state.get('graph')
+        if not isinstance(graph, nx.DiGraph):
+            raise ValueError("Checkpoint must contain a networkx.DiGraph")
+        validate_config(graph.graph.get('incremental_config', {}))
+        turn_count = state.get('turn_count', state.get('turns_processed', 0))
+        evo_cnt = state.get('evo_cnt', 0)
+        evo_threshold = state.get('evo_threshold', self.evo_threshold)
+        for name, value in [('turn_count', turn_count), ('evo_cnt', evo_cnt),
+                            ('evo_threshold', evo_threshold)]:
+            if not isinstance(value, int) or value < 0:
+                raise ValueError(f"Invalid checkpoint counter: {name}")
+        previous_graph = self.graph
+        self.graph = graph
+        try:
+            self._initialize_persona_evidence()
+            self._update_retriever(list(graph))
+        except Exception:
+            self.graph = previous_graph
+            raise
+        self.turn_count = turn_count
+        self.evo_cnt = evo_cnt
+        self.evo_threshold = evo_threshold
+        return self
+
     def _update_retriever(self, node_ids: List[str]):
-        """Helper to update the retriever with new or updated nodes."""
-        docs_to_add = []
-        for node_id in node_ids:
-            if node_id not in self.graph.nodes: continue
-            node_attrs = self.graph.nodes[node_id]
-            doc = (
-                f"content: {node_attrs.get('content', '')} "
-                f"context: {node_attrs.get('context', '')} "
-                f"keywords: {', '.join(node_attrs.get('keywords', []))} "
-                f"tags: {', '.join(node_attrs.get('tags', []))}"
+        """Synchronize documents in graph order, reusing unchanged embeddings.
+
+        Retrieval returns row indices that callers map to graph insertion order.
+        Updating or deleting a node must therefore replace/remove its row, never
+        append a second document. `node_ids` is retained for caller compatibility.
+        """
+        documents = []
+        for _, attrs in self.graph.nodes(data=True):
+            documents.append(
+                f"content: {attrs.get('content', '')} "
+                f"context: {attrs.get('context', '')} "
+                f"keywords: {', '.join(attrs.get('keywords', []))} "
+                f"tags: {', '.join(attrs.get('tags', []))}"
             )
-            docs_to_add.append(doc)
-        
-        if docs_to_add:
-            self.retriever.add_documents(docs_to_add)
+        retriever = self.retriever
+        cached = {}
+        if (retriever.embeddings is not None
+                and len(retriever.embeddings) == len(retriever.corpus)):
+            cached = dict(zip(retriever.corpus, retriever.embeddings))
+        missing = list(dict.fromkeys(doc for doc in documents if doc not in cached))
+        if missing:
+            encoded = retriever.model.encode(missing)
+            cached.update(zip(missing, encoded))
+        embeddings = np.vstack([cached[doc] for doc in documents]) if documents else None
+        # Publish only after encoding succeeds, so failures preserve the old index.
+        retriever.corpus = documents
+        retriever.embeddings = embeddings
+        retriever.bm25 = None
+        retriever.is_bm25_dirty = True
 
     def process_memory(self, node_id: str, note: MemoryNote) -> bool:
         """Level 0 Link Generation and Evolution."""
@@ -657,6 +762,8 @@ class AgenticMemorySystem:
                         self.graph.nodes[n_id]['context'] = new_contexts[i]
                         self.graph.nodes[n_id]['tags'] = new_tags_list[i]
 
+                self._update_retriever(neighbor_ids)
+
                          
         return should_evolve
 
@@ -680,39 +787,21 @@ class AgenticMemorySystem:
 
         print("--- Building Level 1 (Scene) Memories ---")
         
-        level0_nodes = [n for n, d in self.graph.nodes(data=True) if d.get('level') == 'fact']
-        if not level0_nodes:
+        if not self.fact_node_ids:
             print("No Level 0 nodes found.")
             return
-
-        subgraph_l0 = self.graph.subgraph(level0_nodes).to_undirected()
-        
-        try:
-            communities = list(nx.algorithms.community.label_propagation_communities(subgraph_l0))
-        except Exception as e:
-            print(f"Clustering failed: {e}. Using fallback chunks.")
-            communities = [level0_nodes[i:i + 10] for i in range(0, len(level0_nodes), 10)]
-
-        print(f"Identified {len(communities)} potential scenes/communities.")
-        communities_to_process = [c for c in communities if not self._is_community_processed(c, 'scene')]
-        
-        print(f"Processing {len(communities_to_process)} remaining scenes...")
-
-        with tqdm(total=len(communities), initial=len(communities)-len(communities_to_process), desc="Building Level 1 (Scenes)") as pbar:
-            for comm in communities_to_process:
-                scene_data_dict = self.scene_manager.build_scene(self.graph, list(comm))
-                
-                scene_id = scene_data_dict['id']
-                del scene_data_dict['id']
-                
-                self.graph.add_node(scene_id, **scene_data_dict)
-                
-                for nid in comm:
-                    self.graph.add_edge(scene_id, nid, type='contains')
-                
-                self._update_retriever([scene_id])
-                if save_callback: save_callback()
-                pbar.update(1)
+        # Explicit batch construction may flush a pool smaller than 100; it never
+        # reclusters facts that already belong to a scene.
+        pending_scenes = [n for n, attrs in self.graph.nodes(data=True)
+                          if attrs.get('level') == 'scene' and attrs.get('persona_update_pending')]
+        if pending_scenes:
+            self._update_persona_incrementally(pending_scenes)
+            self._update_retriever(list(self.graph))
+            if save_callback:
+                save_callback()
+        new_scenes = self._cluster_unmatched(force=True, save_callback=save_callback)
+        if new_scenes:
+            self._update_retriever(new_scenes)
 
         print("\n--- Building Level 2 (Persona) Memories ---")
         
@@ -745,6 +834,7 @@ class AgenticMemorySystem:
                     for target_id, weight in links:
                         self.graph.add_edge(node_id, target_id, type='contains', weight=weight)
                     
+                    self._ensure_persona_claims(node_id)
                     self._update_retriever([node_id])
 
                 print(f"Created {created_count} Level 2 (Persona) nodes.")
@@ -1061,16 +1151,8 @@ class AgenticMemorySystem:
         print("Consolidating memories: Rebuilding retriever index from scratch.")
         all_node_ids = list(self.graph.nodes())
 
-        try:
-
-            model_name = self.retriever.model.get_config_dict().get('name', 'all-MiniLM-L6-v2')
-        except:
-            model_name = 'all-MiniLM-L6-v2'
-
-        self.retriever = HybridRetriever(model_name=model_name, alpha=0.5)
-
         self._update_retriever(all_node_ids)
-        
+
         print(f"Retriever rebuilt with {len(all_node_ids)} documents.")
 
 class TransformersController(BaseLLMController):
